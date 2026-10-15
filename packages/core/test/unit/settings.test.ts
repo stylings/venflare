@@ -160,6 +160,24 @@ describe("settings", () => {
     expect(published).toBe(false);
   });
 
+  test("rejects a changed account before storing an upload", async () => {
+    const error = await run(Effect.flip(writeSettings(upload())), {
+      accounts: accountStore({
+        stageUpload: () => Effect.succeed(false),
+        publish: () => {
+          throw new Error("Unexpected upload publication");
+        },
+      }),
+      settings: settingsStore({
+        put: () => {
+          throw new Error("Unexpected settings upload");
+        },
+      }),
+    });
+
+    expect(error).toMatchObject({ status: 409, message: "Account changed during upload" });
+  });
+
   test("cleans up a finished upload when deletion invalidates its publication", async () => {
     const removed: string[] = [];
     const error = await run(Effect.flip(writeSettings(upload())), {

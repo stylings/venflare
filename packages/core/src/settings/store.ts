@@ -12,7 +12,7 @@ export interface SettingsStoreService {
   readonly put: (
     key: string,
     body: ReadableStream<Uint8Array> | null,
-    limit: number,
+    sizeLimit: number,
   ) => Effect.Effect<void, StorageError | RequestRejected>;
   readonly delete: (keys: ReadonlyArray<string>) => Effect.Effect<void, StorageError>;
 }
