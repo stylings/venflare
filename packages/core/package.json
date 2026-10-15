@@ -1,0 +1,29 @@
+{
+  "name": "@vencloud/core",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#core/*": "./src/*.ts"
+  },
+  "exports": {
+    "./accounts/auth": "./src/accounts/auth.ts",
+    "./accounts/crypto": "./src/accounts/crypto.ts",
+    "./accounts/delete": "./src/accounts/delete.ts",
+    "./accounts/model": "./src/accounts/model.ts",
+    "./accounts/store": "./src/accounts/store.ts",
+    "./config": "./src/config.ts",
+    "./errors": "./src/errors.ts",
+    "./oauth/authorize": "./src/oauth/authorize.ts",
+    "./oauth/discord": "./src/oauth/discord.ts",
+    "./settings/cleanup": "./src/settings/cleanup.ts",
+    "./settings/operations": "./src/settings/operations.ts",
+    "./settings/store": "./src/settings/store.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.118"
+  }
+}

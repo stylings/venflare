@@ -1,0 +1,30 @@
+{
+  "name": "@vencloud/storage",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#storage/*": "./src/*.ts"
+  },
+  "exports": {
+    "./db": "./src/db/index.ts",
+    "./db/accounts": "./src/db/accounts.ts",
+    "./db/schema": "./src/db/schema.ts",
+    "./r2/settings": "./src/r2/settings.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@vencloud/core": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.4",
+    "effect": "4.0.0-rc.118",
+    "sst": "4.17.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261014.1",
+    "drizzle-kit": "1.0.0-rc.4"
+  }
+}

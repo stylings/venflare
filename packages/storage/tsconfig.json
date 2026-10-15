@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "bun"] },
+  "include": ["src", "drizzle*.ts", "sst-env.d.ts"]
+}

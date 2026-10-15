@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "ignorePatterns": [
+    "**/dist/**",
+    ".sst/**",
+    "**/.wrangler/**",
+    "**/migrations/**",
+    "**/sst-env.d.ts"
+  ],
+  "rules": {
+    "no-unused-vars": "error",
+    "no-debugger": "error",
+    "typescript/no-explicit-any": "error"
+  }
+}

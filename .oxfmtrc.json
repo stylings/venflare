@@ -1,0 +1,11 @@
+{
+  "printWidth": 100,
+  "ignorePatterns": [
+    "bun.lock",
+    "**/migrations/**",
+    "**/dist/**",
+    "**/sst-env.d.ts",
+    ".sst/**",
+    "**/.wrangler/**"
+  ]
+}
