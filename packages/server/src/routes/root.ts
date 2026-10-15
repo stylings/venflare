@@ -1,9 +1,9 @@
 import { Effect } from "effect";
 import { Elysia } from "elysia";
 
+import { deleteAccount } from "@vencloud/core/accounts/delete";
 import { AccountStore } from "@vencloud/core/accounts/store";
 import { AppConfig } from "@vencloud/core/config";
-import { deleteAccount } from "@vencloud/core/accounts/delete";
 import { respond } from "#server/runtime/index";
 
 export const rootRoutes = new Elysia()
@@ -16,7 +16,6 @@ export const rootRoutes = new Elysia()
           ? Response.redirect(config.rootRedirect, 303)
           : Response.json({ ping: "pong" });
       }),
-      (value) => value,
     ),
   )
   .get("/v1", () =>
@@ -31,15 +30,10 @@ export const rootRoutes = new Elysia()
           },
         );
       }),
-      (value) => value,
     ),
   )
   .delete("/v1", ({ request }) =>
-    respond(
-      "Account.delete",
-      deleteAccount(request.headers.get("authorization")),
-      () => new Response(null, { status: 204 }),
-    ),
+    respond("Account.delete", deleteAccount(request.headers.get("authorization"))),
   )
   .get("/metrics", () =>
     respond(
@@ -59,6 +53,5 @@ export const rootRoutes = new Elysia()
           { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8" } },
         );
       }),
-      (value) => value,
     ),
   );

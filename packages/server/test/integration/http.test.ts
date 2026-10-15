@@ -103,30 +103,41 @@ describe("built Worker protocol", () => {
     expect(await response.json()).toEqual({ error: "Missing authorization" });
   });
 
-  test("round-trips opaque bytes and numeric ETags", async () => {
-    const authorization = await login();
-    expect((await request("/v1/settings", { headers: { authorization } })).status).toBe(404);
-    const bytes = new Uint8Array([0, 255, 128, 1, 13, 10]);
-    const uploaded = await put(authorization, bytes);
-    expect(uploaded.status).toBe(200);
-    const { written } = v.parse(v.object({ written: v.number() }), await uploaded.json());
-    expect(Number.isSafeInteger(written)).toBe(true);
-    const downloaded = await request("/v1/settings", { headers: { authorization } });
-    expect(downloaded.status).toBe(200);
-    expect(downloaded.headers.get("etag")).toBe(String(written));
-    expect(downloaded.headers.get("content-type")).toBe("application/octet-stream");
-    expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(bytes);
+  test.each(["/v1/settings", "/v1/settings/"])(
+    "round-trips opaque bytes and ETags at %s",
+    async (path) => {
+      const authorization = await login();
+      expect((await request(path, { headers: { authorization } })).status).toBe(404);
+      const bytes = new Uint8Array([0, 255, 128, 1, 13, 10]);
+      const uploaded = await request(path, {
+        method: "PUT",
+        headers: { authorization, "content-type": "application/octet-stream" },
+        body: bytes,
+      });
+      expect(uploaded.status).toBe(200);
+      const { written } = v.parse(v.object({ written: v.number() }), await uploaded.json());
+      expect(Number.isSafeInteger(written)).toBe(true);
+      const downloaded = await request(path, { headers: { authorization } });
+      expect(downloaded.status).toBe(200);
+      expect(downloaded.headers.get("etag")).toBe(String(written));
+      expect(downloaded.headers.get("content-type")).toBe("application/octet-stream");
+      expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(bytes);
 
-    const head = await request("/v1/settings", { method: "HEAD", headers: { authorization } });
-    expect(head.status).toBe(204);
-    expect(head.headers.get("etag")).toBe(String(written));
-    expect(await head.text()).toBe("");
-    const unchanged = await request("/v1/settings", {
-      headers: { authorization, "if-none-match": String(written) },
-    });
-    expect(unchanged.status).toBe(304);
-    expect(await unchanged.text()).toBe("");
-  });
+      const head = await request(path, { method: "HEAD", headers: { authorization } });
+      expect(head.status).toBe(204);
+      expect(head.headers.get("etag")).toBe(String(written));
+      expect(await head.text()).toBe("");
+      const unchanged = await request(path, {
+        headers: { authorization, "if-none-match": String(written) },
+      });
+      expect(unchanged.status).toBe(304);
+      expect(await unchanged.text()).toBe("");
+
+      const deleted = await request(path, { method: "DELETE", headers: { authorization } });
+      expect(deleted.status).toBe(204);
+      expect((await request(path, { headers: { authorization } })).status).toBe(404);
+    },
+  );
 
   test("supports empty backups", async () => {
     const authorization = await login();

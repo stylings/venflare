@@ -1,13 +1,13 @@
 import { Effect, Redacted } from "effect";
 
+import { decodeAuthorization, storageKey, verifySecret } from "#core/accounts/crypto";
 import { AccountStore } from "#core/accounts/store";
 import { AppConfig } from "#core/config";
-import { decodeAuthorization, verifySecret, storageKey } from "#core/accounts/crypto";
 import { RequestRejected } from "#core/errors";
 
 export const authenticate = Effect.fn("Auth.authenticate")(function* (
   authorization: string | null,
-  allowRemovedUser = false,
+  options: { readonly allowRemovedUser?: boolean } = {},
 ) {
   if (!authorization) {
     return yield* new RequestRejected({ status: 401, message: "Missing authorization" });
@@ -32,7 +32,11 @@ export const authenticate = Effect.fn("Auth.authenticate")(function* (
     return yield* new RequestRejected({ status: 401, message: "Invalid authorization" });
   }
 
-  if (!allowRemovedUser && config.allowedUsers.size > 0 && !config.allowedUsers.has(token.userId)) {
+  if (
+    !options.allowRemovedUser &&
+    config.allowedUsers.size > 0 &&
+    !config.allowedUsers.has(token.userId)
+  ) {
     return yield* new RequestRejected({ status: 403, message: "User is not whitelisted" });
   }
   return account;
