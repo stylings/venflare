@@ -6,8 +6,11 @@ import { DatabaseError } from "@vencloud/core/errors";
 import type { Database } from "#storage/db/index";
 import { accounts, uploads } from "#storage/db/schema";
 
-const uploadLifetime = 60 * 60 * 1000;
-const tombstoneLifetime = 7 * 24 * 60 * 60 * 1000;
+const uploadLifetimeMs = 60 * 60 * 1000;
+const garbageBatchSize = 80;
+
+// Retain deletion records to catch uploads that finish after their objects were removed.
+const tombstoneLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 
 export const accountStoreLayer = (database: Database) =>
   Layer.sync(AccountStore, () => AccountStore.of(accountQueries(database)));
@@ -28,6 +31,7 @@ export const accountQueries = (database: Database): AccountStoreService => ({
       const [account] = await database
         .insert(accounts)
         .values({ ...input, id: crypto.randomUUID() })
+        // Concurrent logins must reuse the existing generation and its derived secret.
         .onConflictDoUpdate({ target: accounts.key, set: { key: sql`${accounts.key}` } })
         .returning();
       if (!account) throw new Error("Account insert returned no row");
@@ -74,8 +78,10 @@ export const accountQueries = (database: Database): AccountStoreService => ({
         .update(accounts)
         .set({
           objectKey,
+          // ETags must increase even when uploads finish in the same millisecond.
           written: sql`max(${accounts.written} + 1, ${now})`,
         })
+        // Deleting settings advances the epoch so a late upload cannot restore them.
         .where(
           and(
             eq(accounts.id, account.id),
@@ -117,13 +123,13 @@ export const accountQueries = (database: Database): AccountStoreService => ({
         .from(uploads)
         .where(
           and(
-            lt(uploads.createdAt, now - uploadLifetime),
+            lt(uploads.createdAt, now - uploadLifetimeMs),
             notExists(active),
             or(isNull(uploads.checkedAt), lt(uploads.checkedAt, now)),
           ),
         )
         .orderBy(sql`coalesce(${uploads.checkedAt}, 0)`, uploads.createdAt)
-        .limit(80);
+        .limit(garbageBatchSize);
       return database
         .update(uploads)
         .set({ claimedAt: sql`coalesce(${uploads.claimedAt}, ${now})`, checkedAt: now })
@@ -138,7 +144,7 @@ export const accountQueries = (database: Database): AccountStoreService => ({
       await database
         .delete(uploads)
         .where(
-          and(inArray(uploads.key, [...keys]), lt(uploads.claimedAt, now - tombstoneLifetime)),
+          and(inArray(uploads.key, [...keys]), lt(uploads.claimedAt, now - tombstoneLifetimeMs)),
         );
     }),
   ),

@@ -3,9 +3,10 @@ import { Effect, Layer } from "effect";
 import { RequestRejected, StorageError } from "@vencloud/core/errors";
 import { SettingsStore } from "@vencloud/core/settings/store";
 
-const partSize = 5 * 1024 * 1024;
+// R2 requires at least 5 MiB per multipart part, except for the final part.
+const multipartPartSize = 5 * 1024 * 1024;
 
-async function* readParts(body: ReadableStream<Uint8Array> | null, limit: number) {
+async function* readUploadParts(body: ReadableStream<Uint8Array> | null, sizeLimit: number) {
   if (!body) {
     yield new Uint8Array(0);
     return;
@@ -13,33 +14,34 @@ async function* readParts(body: ReadableStream<Uint8Array> | null, limit: number
 
   const reader = body.getReader();
   let completed = false;
-  let total = 0;
-  let buffer = new Uint8Array(partSize);
-  let used = 0;
+  let totalBytes = 0;
+  let buffer = new Uint8Array(multipartPartSize);
+  let bufferedBytes = 0;
 
   try {
     while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (total > limit) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      totalBytes += chunk.byteLength;
+      if (totalBytes > sizeLimit) {
         throw new RequestRejected({ status: 413, message: "Settings are too large" });
       }
 
       let offset = 0;
-      while (offset < chunk.value.byteLength) {
-        const length = Math.min(partSize - used, chunk.value.byteLength - offset);
-        buffer.set(chunk.value.subarray(offset, offset + length), used);
-        used += length;
-        offset += length;
-        if (used === partSize) {
+      while (offset < chunk.byteLength) {
+        const bytesToCopy = Math.min(multipartPartSize - bufferedBytes, chunk.byteLength - offset);
+        buffer.set(chunk.subarray(offset, offset + bytesToCopy), bufferedBytes);
+        bufferedBytes += bytesToCopy;
+        offset += bytesToCopy;
+        if (bufferedBytes === multipartPartSize) {
           yield buffer;
-          buffer = new Uint8Array(partSize);
-          used = 0;
+          // The consumer owns the yielded part; later chunks need a fresh buffer.
+          buffer = new Uint8Array(multipartPartSize);
+          bufferedBytes = 0;
         }
       }
     }
-    if (used > 0 || total === 0) yield buffer.subarray(0, used);
+    if (bufferedBytes > 0 || totalBytes === 0) yield buffer.subarray(0, bufferedBytes);
     completed = true;
   } finally {
     if (!completed) await reader.cancel().catch(() => {});
@@ -51,27 +53,27 @@ const writeSettings = async (
   bucket: R2Bucket,
   key: string,
   body: ReadableStream<Uint8Array> | null,
-  limit: number,
+  sizeLimit: number,
 ): Promise<void> => {
-  let multipart: R2MultipartUpload | undefined;
-  const parts: R2UploadedPart[] = [];
+  let upload: R2MultipartUpload | undefined;
+  const uploadedParts: R2UploadedPart[] = [];
 
   try {
-    for await (const part of readParts(body, limit)) {
-      if (!multipart && part.byteLength < partSize) {
+    for await (const part of readUploadParts(body, sizeLimit)) {
+      if (!upload && part.byteLength < multipartPartSize) {
         await bucket.put(key, part, { httpMetadata: { contentType: "application/octet-stream" } });
         return;
       }
-      multipart ??= await bucket.createMultipartUpload(key, {
+      upload ??= await bucket.createMultipartUpload(key, {
         httpMetadata: { contentType: "application/octet-stream" },
       });
-      parts.push(await multipart.uploadPart(parts.length + 1, part));
+      uploadedParts.push(await upload.uploadPart(uploadedParts.length + 1, part));
     }
-    if (multipart) await multipart.complete(parts);
+    if (upload) await upload.complete(uploadedParts);
   } catch (error) {
-    if (multipart) {
+    if (upload) {
       try {
-        await multipart.abort();
+        await upload.abort();
       } catch {
         console.error({ event: "storage.cleanup_failed", operation: "abort multipart upload" });
       }
@@ -92,9 +94,9 @@ export const settingsStoreLayer = (bucket: R2Bucket) =>
           catch: (cause) => new StorageError({ operation: "read settings", cause }),
         }),
       ),
-      put: Effect.fn("SettingsStore.put")((key, body, limit) =>
+      put: Effect.fn("SettingsStore.put")((key, body, sizeLimit) =>
         Effect.tryPromise({
-          try: () => writeSettings(bucket, key, body, limit),
+          try: () => writeSettings(bucket, key, body, sizeLimit),
           catch: (cause) =>
             cause instanceof RequestRejected
               ? cause

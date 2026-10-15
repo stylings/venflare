@@ -3,6 +3,8 @@ import { Clock, Effect } from "effect";
 import { AccountStore } from "#core/accounts/store";
 import { SettingsStore } from "#core/settings/store";
 
+const maxCleanupBatches = 20;
+
 export const removeCurrentObject = Effect.fn("Settings.removeCurrentObject")(function* (
   key: string | null,
 ) {
@@ -23,7 +25,7 @@ export const collectGarbage = Effect.fn("Settings.collectGarbage")(function* () 
   const now = yield* Clock.currentTimeMillis;
   let deleted = 0;
 
-  for (let batch = 0; batch < 20; batch++) {
+  for (let batch = 0; batch < maxCleanupBatches; batch++) {
     const garbage = yield* accounts.claimGarbage(now);
     if (garbage.length === 0) break;
     const keys = garbage.map((upload) => upload.key);
