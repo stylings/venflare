@@ -4,6 +4,7 @@ import { Elysia, NotFound, ParseError, ValidationError } from "elysia";
 import { collectGarbage } from "@vencloud/core/settings/cleanup";
 import { finalizeResponse, preflight } from "#server/http/responses";
 import { instrumentRequest } from "#server/instrumentation/index";
+import { metricsRoutes } from "#server/routes/metrics";
 import { oauthRoutes } from "#server/routes/oauth";
 import { rootRoutes } from "#server/routes/root";
 import { settingsRoutes } from "#server/routes/settings";
@@ -18,6 +19,7 @@ export const app = new Elysia()
     return Response.json({ error: "Internal server error" }, { status: 500 });
   })
   .use(rootRoutes)
+  .use(metricsRoutes)
   .use(oauthRoutes)
   .use(settingsRoutes)
   .compile();
