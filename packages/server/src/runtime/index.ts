@@ -11,6 +11,7 @@ import { createDb } from "@vencloud/storage/db";
 import { accountStoreLayer } from "@vencloud/storage/db/accounts";
 import { settingsStoreLayer } from "@vencloud/storage/r2/settings";
 import { discordClientLayer } from "#server/discord/client";
+import { toResponse } from "#server/http/responses";
 import { recordFailure, withSpan } from "#server/instrumentation/index";
 
 export type Services = AppConfig | AccountStore | SettingsStore | DiscordClient;
@@ -50,14 +51,13 @@ const errorResponse = (error: ApplicationError): Response => {
 export const respond = <A>(
   name: string,
   effect: Effect.Effect<A, ApplicationError, Services>,
-  encode: (value: A) => Response = (value) => Response.json(value),
 ): Promise<Response> => {
   const layer = runtimes.getStore();
   if (!layer) throw new Error("Request is missing its application runtime");
   return withSpan(name, () =>
     effect.pipe(
       Effect.provide(layer),
-      Effect.match({ onFailure: errorResponse, onSuccess: encode }),
+      Effect.match({ onFailure: errorResponse, onSuccess: toResponse }),
       Effect.runPromise,
     ),
   );

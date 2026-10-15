@@ -3,32 +3,22 @@ import { Elysia } from "elysia";
 import { deleteSettings, readSettings, writeSettings } from "@vencloud/core/settings/operations";
 import { respond } from "#server/runtime/index";
 
-export const settingsRoutes = new Elysia()
-  .head("/v1/settings", ({ request }) =>
+export const settingsRoutes = new Elysia({ prefix: "/v1/settings" })
+  .head("/", ({ request }) =>
     respond(
       "Settings.head",
-      readSettings(request.headers.get("authorization"), null, true),
-      (value) => value,
+      readSettings(request.headers.get("authorization"), { headOnly: true }),
     ),
   )
-  .get("/v1/settings", ({ request }) =>
+  .get("/", ({ request }) =>
     respond(
       "Settings.get",
-      readSettings(
-        request.headers.get("authorization"),
-        request.headers.get("if-none-match"),
-        false,
-      ),
-      (value) => value,
+      readSettings(request.headers.get("authorization"), {
+        ifNoneMatch: request.headers.get("if-none-match"),
+      }),
     ),
   )
-  .put("/v1/settings", { parse: "none" }, ({ request }) =>
-    respond("Settings.put", writeSettings(request)),
-  )
-  .delete("/v1/settings", ({ request }) =>
-    respond(
-      "Settings.delete",
-      deleteSettings(request.headers.get("authorization")),
-      () => new Response(null, { status: 204 }),
-    ),
+  .put("/", { parse: "none" }, ({ request }) => respond("Settings.put", writeSettings(request)))
+  .delete("/", ({ request }) =>
+    respond("Settings.delete", deleteSettings(request.headers.get("authorization"))),
   );

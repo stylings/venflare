@@ -1,12 +1,11 @@
-import { Layer, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
 
-import { AccountStore, type AccountStoreService } from "#core/accounts/store";
-import { AppConfig, type Configuration } from "#core/config";
 import { createSecret } from "#core/accounts/crypto";
 import type { Account } from "#core/accounts/model";
+import { AccountStore, type AccountStoreService } from "#core/accounts/store";
+import { AppConfig, type Configuration } from "#core/config";
 import { DiscordClient, type DiscordClientService } from "#core/oauth/discord";
 import { SettingsStore, type SettingsStoreService } from "#core/settings/store";
-import { Effect } from "effect";
 
 export type Services = AppConfig | AccountStore | SettingsStore | DiscordClient;
 

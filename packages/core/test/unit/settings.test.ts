@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
 
 import { authenticate } from "#core/accounts/auth";
+import { deleteAccount } from "#core/accounts/delete";
 import { DatabaseError, RequestRejected, StorageError } from "#core/errors";
 import { authorize } from "#core/oauth/authorize";
-import { deleteAccount } from "#core/accounts/delete";
 import { collectGarbage } from "#core/settings/cleanup";
 import { deleteSettings, readSettings, writeSettings } from "#core/settings/operations";
 import type { Services } from "../support";
@@ -102,14 +102,36 @@ describe("settings", () => {
         },
       }),
     };
-    const head = await run(readSettings(authorization, null, true), options);
+    const head = await run(
+      readSettings(authorization, { headOnly: true, ifNoneMatch: "1234" }),
+      options,
+    );
     expect(head.status).toBe(204);
     expect(head.headers.get("etag")).toBe("1234");
-    expect((await run(readSettings(authorization, "1234", false), options)).status).toBe(304);
+    const unchanged = await run(readSettings(authorization, { ifNoneMatch: "1234" }), options);
+    expect(unchanged.status).toBe(304);
   });
 
   test("returns 404 when settings are absent", async () => {
-    expect((await run(readSettings(authorization, null, false))).status).toBe(404);
+    expect((await run(readSettings(authorization))).status).toBe(404);
+  });
+
+  test("returns the settings body when the ETag has changed", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const response = await run(readSettings(authorization, { ifNoneMatch: "old" }), {
+      accounts: accountStore({
+        find: () => Effect.succeed(account({ objectKey: "blob", written: 1234 })),
+      }),
+      settings: settingsStore({
+        get: () => Effect.succeed({ body: new Blob([bytes]).stream(), size: bytes.byteLength }),
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("etag")).toBe("1234");
+    expect(response.headers.get("content-type")).toBe("application/octet-stream");
+    expect(response.headers.get("content-length")).toBe("3");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
 
   test("checks content type and declared length before uploading", async () => {

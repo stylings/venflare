@@ -7,17 +7,22 @@ import { RequestRejected } from "#core/errors";
 import { removeCurrentObject } from "#core/settings/cleanup";
 import { SettingsStore } from "#core/settings/store";
 
+interface ReadSettingsOptions {
+  readonly headOnly?: boolean;
+  readonly ifNoneMatch?: string | null;
+}
+
 export const readSettings = Effect.fn("Settings.read")(function* (
   authorization: string | null,
-  ifNoneMatch: string | null,
-  head: boolean,
+  options: ReadSettingsOptions = {},
 ) {
   const account = yield* authenticate(authorization);
   if (!account.objectKey) return new Response(null, { status: 404 });
 
-  const headers = { ETag: String(account.written) };
-  if (head) return new Response(null, { status: 204, headers });
-  if (ifNoneMatch === String(account.written)) return new Response(null, { status: 304 });
+  const etag = String(account.written);
+  const headers = { ETag: etag };
+  if (options.headOnly) return new Response(null, { status: 204, headers });
+  if (options.ifNoneMatch === etag) return new Response(null, { status: 304 });
 
   const store = yield* SettingsStore;
   const settings = yield* store.get(account.objectKey);
@@ -64,7 +69,7 @@ export const writeSettings = Effect.fn("Settings.write")(function* (request: Req
 export const deleteSettings = Effect.fn("Settings.delete")(function* (
   authorization: string | null,
 ) {
-  const account = yield* authenticate(authorization, true);
+  const account = yield* authenticate(authorization, { allowRemovedUser: true });
   const accounts = yield* AccountStore;
   yield* accounts.deleteSettings(account);
   yield* removeCurrentObject(account.objectKey);
