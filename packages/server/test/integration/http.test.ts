@@ -205,9 +205,34 @@ describe("built Worker protocol", () => {
   });
 
   test("keeps metrics opt-in and unknown routes predictable", async () => {
-    expect((await request("/metrics")).status).toBe(404);
+    const metrics = await request("/metrics");
+    expect(metrics.status).toBe(404);
+    expect(await metrics.json()).toEqual({ error: "Metrics are not enabled" });
     const response = await request("/missing");
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Not found" });
+  });
+
+  test("exposes the registered-account gauge when metrics are enabled", async () => {
+    const local = await createHarness({ PROMETHEUS: "true" });
+    try {
+      const empty = await local.request("/metrics");
+      expect(empty.status).toBe(200);
+      expect(empty.headers.get("content-type")).toBe("text/plain; version=0.0.4; charset=utf-8");
+      expect(await empty.text()).toBe(
+        [
+          "# HELP vencord_accounts_registered The total number of accounts registered",
+          "# TYPE vencord_accounts_registered gauge",
+          "vencord_accounts_registered 0",
+          "",
+        ].join("\n"),
+      );
+
+      expect((await local.request("/v1/oauth/callback?code=valid")).status).toBe(200);
+      const registered = await local.request("/metrics");
+      expect(await registered.text()).toContain("vencord_accounts_registered 1\n");
+    } finally {
+      await local.worker.dispose();
+    }
   });
 });
