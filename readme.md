@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Vencord settings sync through a Worker, D1, and R2" width="960" />
+  <img src=".github/assets/banner.svg" alt="Vencord settings sync through a Worker, D1, and R2" width="960" />
 </p>
 
 <h1 align="center">Venflare</h1>
