@@ -9,9 +9,7 @@ let harness: Harness;
 beforeAll(async () => {
   harness = await createHarness();
 });
-afterAll(async () => {
-  await harness?.worker.dispose();
-});
+afterAll(() => harness?.worker.dispose());
 beforeEach(async () => {
   await harness.database.batch([
     harness.database.prepare("DELETE FROM accounts"),
