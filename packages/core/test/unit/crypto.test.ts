@@ -240,28 +240,30 @@ describe("settings encryption", () => {
     }
   });
 
-  test("rejects corrupted headers, modified ciphertext, and truncated multipart streams", async () => {
-    const singlePartMax = encryptedPartSize - 36;
-    const parts = await collectParts(new Uint8Array(singlePartMax + 10).fill(7));
-    expect(parts).toHaveLength(2);
+  test("rejects corrupted headers, modified frames, and truncated multipart streams", async () => {
+    const parts = await collectParts(new Uint8Array(2 * encryptedPartSize).fill(7));
+    expect(parts).toHaveLength(3);
     const combined = joinParts(parts);
 
     const badMagic = combined.slice();
     badMagic[0]! ^= 0xff;
     const badCiphertext = combined.slice();
     badCiphertext[25]! ^= 0xff;
-    const truncated = parts[0]!;
+    const badSecondFrame = combined.slice();
+    badSecondFrame[encryptedPartSize + 25]! ^= 0xff;
+    const badFinalFrame = combined.slice();
+    badFinalFrame[badFinalFrame.byteLength - 1]! ^= 0xff;
 
-    for (const invalid of [new Uint8Array([1, 2, 3]), badMagic, badCiphertext, truncated]) {
-      const result = await Effect.runPromise(
-        Effect.result(
-          decryptSettings({
-            ...keyInput,
-            stored: { body: new Blob([invalid]).stream(), size: invalid.byteLength },
-          }),
-        ),
-      );
-      expect(result._tag).toBe("Failure");
+    for (const invalid of [
+      new Uint8Array([1, 2, 3]),
+      badMagic,
+      badCiphertext,
+      badSecondFrame,
+      badFinalFrame,
+      parts[0]!,
+      joinParts(parts.slice(0, -1)),
+    ]) {
+      expect(decryptJoined(invalid)).rejects.toThrow();
     }
   });
 
