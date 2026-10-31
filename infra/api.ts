@@ -56,5 +56,5 @@ export const api = new sst.cloudflare.Worker("Vencloud", {
 new cloudflare.WorkersCronTrigger("SettingsCleanup", {
   accountId: sst.cloudflare.DEFAULT_ACCOUNT_ID,
   scriptName: api.nodes.worker.scriptName,
-  schedules: [{ cron: "0 * * * *" }], // Every hour on the hour (UTC).
+  schedules: [{ cron: "0 * * * *" }],
 });

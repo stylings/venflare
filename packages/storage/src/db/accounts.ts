@@ -9,7 +9,7 @@ import { accounts, uploads } from "#storage/db/schema";
 const uploadLifetimeMs = 60 * 60 * 1000;
 const garbageBatchSize = 80;
 
-// Retain deletion records to catch uploads that finish after their objects were removed.
+// retain tombstones for uploads that finish after deletion
 const tombstoneLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 
 export const accountStoreLayer = (database: Database) =>
@@ -31,7 +31,7 @@ export const accountQueries = (database: Database): AccountStoreService => ({
       const [account] = await database
         .insert(accounts)
         .values({ ...input, id: crypto.randomUUID() })
-        // Concurrent logins must reuse the existing generation and its derived secret.
+        // preserve the generation across concurrent logins
         .onConflictDoUpdate({ target: accounts.key, set: { key: sql`${accounts.key}` } })
         .returning();
       if (!account) throw new Error("Account insert returned no row");
@@ -78,10 +78,10 @@ export const accountQueries = (database: Database): AccountStoreService => ({
         .update(accounts)
         .set({
           objectKey,
-          // ETags must increase even when uploads finish in the same millisecond.
+          // etags must increase, even within the same millisecond
           written: sql`max(${accounts.written} + 1, ${now})`,
         })
-        // Deleting settings advances the epoch so a late upload cannot restore them.
+        // late uploads must not restore deleted settings
         .where(
           and(
             eq(accounts.id, account.id),
