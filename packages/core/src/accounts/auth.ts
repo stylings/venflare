@@ -39,5 +39,5 @@ export const authenticate = Effect.fn("Auth.authenticate")(function* (
   ) {
     return yield* new RequestRejected({ status: 403, message: "User is not whitelisted" });
   }
-  return account;
+  return { ...account, userId: token.userId };
 });
