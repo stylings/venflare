@@ -145,6 +145,28 @@ describe("built Worker protocol", () => {
     expect(await response.text()).toBe("");
   });
 
+  test("encrypts objects stored in R2 and rejects tampered ciphertext", async () => {
+    const authorization = await login();
+    const secretSettings = "super-secret-vencord-settings-payload";
+    expect((await put(authorization, secretSettings)).status).toBe(200);
+
+    const listed = await harness.bucket.list();
+    expect(listed.objects).toHaveLength(1);
+    const key = listed.objects[0]!.key;
+    const object = await harness.bucket.get(key);
+    expect(object).not.toBeNull();
+    const raw = new Uint8Array(await object!.arrayBuffer());
+    expect(new TextDecoder().decode(raw)).not.toContain(secretSettings);
+    expect(raw.subarray(0, 4)).toEqual(new Uint8Array([0x56, 0x46, 0x4c, 0x01]));
+
+    const tampered = raw.slice();
+    tampered[tampered.byteLength - 1]! ^= 0xff;
+    await harness.bucket.put(key, tampered);
+    const corrupted = await request("/v1/settings", { headers: { authorization } });
+    expect(corrupted.status).toBe(500);
+    expect(await corrupted.json()).toEqual({ error: "Internal server error" });
+  });
+
   test("streams a maximum-size backup through multipart R2 storage", async () => {
     const authorization = await login();
     const body = new Uint8Array(32_000_000).fill(173);
