@@ -43,12 +43,14 @@ export const finalizeResponse = (request: Request, response: Response): Response
   const length = headers.get("content-length");
   if (body && length !== null) {
     const stream = new FixedLengthStream(Number(length));
-    void body.pipeTo(stream.writable).catch(() => {
+    void body.pipeTo(stream.writable).catch((cause) => {
       console.error({
         event: "response.failed",
         error: "BodyStreamError",
+        cause,
         method: request.method,
         path: new URL(request.url).pathname,
+        rayId: request.headers.get("cf-ray"),
       });
     });
     body = stream.readable;
