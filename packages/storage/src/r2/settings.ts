@@ -7,13 +7,13 @@ import { SettingsStore } from "@vencloud/core/settings/store";
 const writeSettings = async (
   bucket: R2Bucket,
   key: string,
-  parts: AsyncIterable<Uint8Array<ArrayBuffer>>,
+  encryptedParts: AsyncIterable<Uint8Array<ArrayBuffer>>,
 ): Promise<void> => {
   let upload: R2MultipartUpload | undefined;
   const uploadedParts: R2UploadedPart[] = [];
 
   try {
-    for await (const part of parts) {
+    for await (const part of encryptedParts) {
       if (!upload && part.byteLength < encryptedPartSize) {
         await bucket.put(key, part, { httpMetadata: { contentType: "application/octet-stream" } });
         return;
@@ -48,9 +48,9 @@ export const settingsStoreLayer = (bucket: R2Bucket) =>
           catch: (cause) => new StorageError({ operation: "read settings", cause }),
         }),
       ),
-      put: Effect.fn("SettingsStore.put")((key, parts) =>
+      put: Effect.fn("SettingsStore.put")((key, encryptedParts) =>
         Effect.tryPromise({
-          try: () => writeSettings(bucket, key, parts),
+          try: () => writeSettings(bucket, key, encryptedParts),
           catch: (cause) =>
             cause instanceof RequestRejected
               ? cause
