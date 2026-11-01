@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Effect } from "effect";
 
-import { createSecret, decodeAuthorization, verifySecret, storageKey } from "#core/accounts/crypto";
+import { createSecret, decodeAuthorization, storageKey, verifySecret } from "#core/accounts/crypto";
 import {
   decryptedSize,
   decryptSettings,
@@ -10,13 +10,20 @@ import {
   encryptSettings,
   type SettingsKeyInput,
 } from "#core/settings/crypto";
+import type { StoredSettings } from "#core/settings/store";
+
+const userId = "123456789012345678";
+const authPepper = "pepper";
+const otherPepper = "other-pepper";
+const generation = "generation";
+const nextGeneration = "next-generation";
+
+const hmac = (secret: string, value: string) =>
+  createHmac("sha256", secret).update(value).digest("hex");
 
 describe("Vencloud authorization", () => {
   test("decodes the existing client's raw base64 token", () => {
-    expect(decodeAuthorization(btoa("secret:123456789012345678"))).toEqual({
-      secret: "secret",
-      userId: "123456789012345678",
-    });
+    expect(decodeAuthorization(btoa(`secret:${userId}`))).toEqual({ secret: "secret", userId });
   });
 
   test.each([
@@ -33,48 +40,71 @@ describe("Vencloud authorization", () => {
   });
 
   test("uses HMAC-SHA-256 with explicit purpose separation", async () => {
-    const key = await storageKey("pepper", "123", "account");
-    expect(key).toBe(createHmac("sha256", "pepper").update("vencloud:account:123").digest("hex"));
-    expect(key).not.toBe(await storageKey("pepper", "123", "settings"));
-    expect(key).not.toBe(await storageKey("other-pepper", "123", "account"));
-    expect(key).not.toBe(await createSecret("pepper", "123"));
+    const key = await storageKey(authPepper, userId, "account");
+    expect(key).toBe(hmac(authPepper, `vencloud:account:${userId}`));
+    expect(key).not.toBe(await storageKey(authPepper, userId, "settings"));
+    expect(key).not.toBe(await storageKey(otherPepper, userId, "account"));
+    expect(key).not.toBe(await createSecret(authPepper, userId));
   });
 
   test("derives a stable token bound to the account generation", async () => {
-    const first = await createSecret("pepper", "generation");
-    expect(first).toMatch(/^[a-f0-9]{64}$/);
-    expect(first).toBe(
-      createHmac("sha256", "pepper").update("vencloud:secret:generation").digest("hex"),
-    );
-    expect(first).toBe(await createSecret("pepper", "generation"));
-    expect(first).not.toBe(await createSecret("pepper", "next-generation"));
+    const secret = await createSecret(authPepper, generation);
+    expect(secret).toMatch(/^[a-f0-9]{64}$/);
+    expect(secret).toBe(hmac(authPepper, `vencloud:secret:${generation}`));
+    expect(secret).toBe(await createSecret(authPepper, generation));
+    expect(secret).not.toBe(await createSecret(authPepper, nextGeneration));
   });
 
   test("verifies tokens using the server key and account generation", async () => {
-    const secret = await createSecret("pepper", "generation");
-    expect(await verifySecret("pepper", "generation", secret)).toBe(true);
-    expect(await verifySecret("other-pepper", "generation", secret)).toBe(false);
-    expect(await verifySecret("pepper", "next-generation", secret)).toBe(false);
-    expect(await verifySecret("pepper", "generation", "0".repeat(64))).toBe(false);
+    const secret = await createSecret(authPepper, generation);
+    expect(await verifySecret(authPepper, generation, secret)).toBe(true);
+    for (const [key, value, candidate] of [
+      [otherPepper, generation, secret],
+      [authPepper, nextGeneration, secret],
+      [authPepper, generation, "0".repeat(64)],
+    ] as const) {
+      expect(await verifySecret(key, value, candidate)).toBe(false);
+    }
   });
 
   test.each(["", "not-hex", "0".repeat(63), "0".repeat(65), "g".repeat(64)])(
     "rejects malformed secrets: %s",
     async (secret) => {
-      expect(await verifySecret("pepper", "generation", secret)).toBe(false);
+      expect(await verifySecret(authPepper, generation, secret)).toBe(false);
     },
   );
 });
 
-const keyInput: SettingsKeyInput = {
-  pepper: "b".repeat(128),
-  userId: "123456789012345678",
-  accountId: "d2406d84-17cd-4362-b0a1-c78509726193",
-  objectKey: "settings/settings-key/object-id",
+const settingsPepper = "b".repeat(128);
+const settingsObjectKey = "settings/settings-key/object-id";
+const headerSize = 20;
+const tagSize = 16;
+
+const baseAccount = {
+  id: "d2406d84-17cd-4362-b0a1-c78509726193",
+  userId,
 };
 
+const keyInput: SettingsKeyInput = {
+  pepper: settingsPepper,
+  account: baseAccount,
+  objectKey: settingsObjectKey,
+};
+
+const asStream = (bytes: Uint8Array<ArrayBuffer>) => new Blob([bytes]).stream();
+
+const storedBytes = (bytes: Uint8Array<ArrayBuffer>): StoredSettings => ({
+  body: asStream(bytes),
+  size: bytes.byteLength,
+});
+
+const storedStream = (body: ReadableStream<Uint8Array>, size: number): StoredSettings => ({
+  body,
+  size,
+});
+
 const collectParts = (
-  body: Uint8Array<ArrayBuffer>,
+  body: Uint8Array<ArrayBuffer> | ReadableStream<Uint8Array>,
   overrides: Partial<SettingsKeyInput> = {},
   sizeLimit = 32_000_000,
 ): Promise<Uint8Array<ArrayBuffer>[]> =>
@@ -82,14 +112,16 @@ const collectParts = (
     encryptSettings({
       ...keyInput,
       ...overrides,
-      body: new Blob([body]).stream(),
+      body: body instanceof Uint8Array ? asStream(body) : body,
       sizeLimit,
     }),
   );
 
+const byteLength = (parts: ReadonlyArray<Uint8Array>): number =>
+  parts.reduce((sum, part) => sum + part.byteLength, 0);
+
 const joinParts = (parts: ReadonlyArray<Uint8Array>): Uint8Array<ArrayBuffer> => {
-  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
-  const combined = new Uint8Array(total);
+  const combined = new Uint8Array(byteLength(parts));
   let offset = 0;
   for (const part of parts) {
     combined.set(part, offset);
@@ -98,26 +130,34 @@ const joinParts = (parts: ReadonlyArray<Uint8Array>): Uint8Array<ArrayBuffer> =>
   return combined;
 };
 
-const decryptJoined = async (
-  encrypted: Uint8Array<ArrayBuffer>,
+const decryptToBytes = async (
+  stored: StoredSettings,
   overrides: Partial<SettingsKeyInput> = {},
 ): Promise<Uint8Array<ArrayBuffer>> => {
-  const decrypted = await Effect.runPromise(
-    decryptSettings({
-      ...keyInput,
-      ...overrides,
-      stored: { body: new Blob([encrypted]).stream(), size: encrypted.byteLength },
-    }),
-  );
+  const decrypted = await Effect.runPromise(decryptSettings({ ...keyInput, ...overrides, stored }));
   const bytes = new Uint8Array(await new Response(decrypted.body).arrayBuffer());
   expect(bytes.byteLength).toBe(decrypted.size);
   return bytes;
 };
 
+const decryptBytes = (
+  encrypted: Uint8Array<ArrayBuffer>,
+  overrides: Partial<SettingsKeyInput> = {},
+) => decryptToBytes(storedBytes(encrypted), overrides);
+
+const decryptResult = (stored: StoredSettings, overrides: Partial<SettingsKeyInput> = {}) =>
+  Effect.runPromise(Effect.result(decryptSettings({ ...keyInput, ...overrides, stored })));
+
+const flip = (bytes: Uint8Array<ArrayBuffer>, offset: number): Uint8Array<ArrayBuffer> => {
+  const copy = bytes.slice();
+  copy[offset]! ^= 0xff;
+  return copy;
+};
+
 describe("settings encryption", () => {
   test("encrypts empty, single-part, and multi-part streams with 5 MiB non-final parts", async () => {
-    const singlePartMax = encryptedPartSize - 36;
-    const twoPartMax = 2 * encryptedPartSize - 52;
+    const singlePartMax = encryptedPartSize - headerSize - tagSize;
+    const twoPartMax = 2 * encryptedPartSize - headerSize - 2 * tagSize;
     for (const length of [0, 17, singlePartMax, singlePartMax + 1, twoPartMax, twoPartMax + 1]) {
       const plaintext = new Uint8Array(length);
       if (length > 0) {
@@ -132,7 +172,7 @@ describe("settings encryption", () => {
 
       const combined = joinParts(parts);
       expect(decryptedSize(combined.byteLength)).toBe(length);
-      expect(await decryptJoined(combined)).toEqual(plaintext);
+      expect(await decryptBytes(combined)).toEqual(plaintext);
     }
   });
 
@@ -154,12 +194,8 @@ describe("settings encryption", () => {
       { highWaterMark: 0 },
     );
 
-    const parts = await Array.fromAsync(
-      encryptSettings({ ...keyInput, body, sizeLimit: plaintext.byteLength }),
-    );
-    const decrypted = await decryptJoined(joinParts(parts));
-    expect(decrypted.byteLength).toBe(plaintext.byteLength);
-    expect(decrypted.every((byte, index) => byte === plaintext[index])).toBe(true);
+    const parts = await collectParts(body, {}, plaintext.byteLength);
+    expect(await decryptBytes(joinParts(parts))).toEqual(plaintext);
   });
 
   test("decrypts fragmented ciphertext across frame boundaries", async () => {
@@ -178,10 +214,7 @@ describe("settings encryption", () => {
       },
     });
 
-    const decrypted = await Effect.runPromise(
-      decryptSettings({ ...keyInput, stored: { body, size: encrypted.byteLength } }),
-    );
-    expect(new Uint8Array(await new Response(decrypted.body).arrayBuffer())).toEqual(plaintext);
+    expect(await decryptToBytes(storedStream(body, encrypted.byteLength))).toEqual(plaintext);
     expect(body.locked).toBe(false);
   });
 
@@ -205,10 +238,7 @@ describe("settings encryption", () => {
       { highWaterMark: 0 },
     );
     const decrypted = await Effect.runPromise(
-      decryptSettings({
-        ...keyInput,
-        stored: { body, size: parts.reduce((sum, part) => sum + part.byteLength, 0) },
-      }),
+      decryptSettings({ ...keyInput, stored: storedStream(body, byteLength(parts)) }),
     );
     const reader = decrypted.body.getReader();
     await reader.read();
@@ -221,21 +251,15 @@ describe("settings encryption", () => {
 
   test("binds ciphertext to the pepper, user ID, account generation, and object key", async () => {
     const encrypted = joinParts(await collectParts(new Uint8Array([1, 2, 3, 4])));
+    const otherUser = { ...baseAccount, userId: "999999999999999999" };
+    const regenerated = { ...baseAccount, id: "00000000-0000-4000-8000-000000000000" };
     for (const overrides of [
       { pepper: "x".repeat(128) },
-      { userId: "999999999999999999" },
-      { accountId: "00000000-0000-4000-8000-000000000000" },
+      { account: otherUser },
+      { account: regenerated },
       { objectKey: "settings/settings-key/other-object" },
     ]) {
-      const result = await Effect.runPromise(
-        Effect.result(
-          decryptSettings({
-            ...keyInput,
-            ...overrides,
-            stored: { body: new Blob([encrypted]).stream(), size: encrypted.byteLength },
-          }),
-        ),
-      );
+      const result = await decryptResult(storedBytes(encrypted), overrides);
       expect(result._tag).toBe("Failure");
     }
   });
@@ -245,30 +269,22 @@ describe("settings encryption", () => {
     expect(parts).toHaveLength(3);
     const combined = joinParts(parts);
 
-    const badMagic = combined.slice();
-    badMagic[0]! ^= 0xff;
-    const badCiphertext = combined.slice();
-    badCiphertext[25]! ^= 0xff;
-    const badSecondFrame = combined.slice();
-    badSecondFrame[encryptedPartSize + 25]! ^= 0xff;
-    const badFinalFrame = combined.slice();
-    badFinalFrame[badFinalFrame.byteLength - 1]! ^= 0xff;
-
-    for (const invalid of [
+    const invalid = [
       new Uint8Array([1, 2, 3]),
-      badMagic,
-      badCiphertext,
-      badSecondFrame,
-      badFinalFrame,
+      flip(combined, 0),
+      flip(combined, headerSize),
+      flip(combined, encryptedPartSize),
+      flip(combined, combined.byteLength - 1),
       parts[0]!,
       joinParts(parts.slice(0, -1)),
-    ]) {
-      expect(decryptJoined(invalid)).rejects.toThrow();
+    ];
+    for (const bytes of invalid) {
+      await expect(decryptBytes(bytes)).rejects.toThrow();
     }
   });
 
-  test("rejects streams that exceed the size limit while encrypting", () => {
-    expect(collectParts(new Uint8Array(11), {}, 10)).rejects.toMatchObject({
+  test("rejects streams that exceed the size limit while encrypting", async () => {
+    await expect(collectParts(new Uint8Array(11), {}, 10)).rejects.toMatchObject({
       _tag: "RequestRejected",
       status: 413,
     });

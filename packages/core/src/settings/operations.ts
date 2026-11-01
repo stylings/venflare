@@ -32,8 +32,7 @@ export const readSettings = Effect.fn("Settings.read")(function* (
   if (!stored) return new Response(null, { status: 404 });
   const settings = yield* decryptSettings({
     pepper: Redacted.value(config.settingsPepper),
-    userId: account.userId,
-    accountId: account.id,
+    account,
     objectKey,
     stored,
   });
@@ -71,8 +70,7 @@ export const writeSettings = Effect.fn("Settings.write")(function* (request: Req
     objectKey,
     encryptSettings({
       pepper: Redacted.value(config.settingsPepper),
-      userId: account.userId,
-      accountId: account.id,
+      account,
       objectKey,
       body: request.body,
       sizeLimit: config.sizeLimit,

@@ -16,8 +16,7 @@ const encoder = new TextEncoder();
 
 export interface SettingsKeyInput {
   readonly pepper: string;
-  readonly userId: string;
-  readonly accountId: string;
+  readonly account: { readonly id: string; readonly userId: string };
   readonly objectKey: string;
 }
 
@@ -26,6 +25,9 @@ interface Frame {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly isLast: boolean;
 }
+
+const plaintextFrameSize = (index: number): number =>
+  encryptedPartSize - tagLength - (index === 0 ? headerLength : 0);
 
 const deriveEncryptionKey = async (
   input: SettingsKeyInput,
@@ -44,7 +46,7 @@ const deriveEncryptionKey = async (
       hash: "SHA-256",
       salt,
       info: encoder.encode(
-        `vencloud:encryption:v1:${input.userId}:${input.accountId}:${input.objectKey}`,
+        `vencloud:encryption:v1:${input.account.userId}:${input.account.id}:${input.objectKey}`,
       ),
     },
     baseKey,
@@ -54,28 +56,42 @@ const deriveEncryptionKey = async (
   );
 };
 
-const chunkNonce = (index: number, isLast: boolean): Uint8Array<ArrayBuffer> => {
+const cipherParams = (header: Uint8Array<ArrayBuffer>, frame: Frame) => {
   const nonce = new Uint8Array(nonceLength);
-  new DataView(nonce.buffer).setUint32(7, index, false);
-  nonce[11] = isLast ? 1 : 0;
-  return nonce;
+  new DataView(nonce.buffer).setUint32(7, frame.index, false);
+  nonce[11] = frame.isLast ? 1 : 0;
+  return { name: "AES-GCM", iv: nonce, additionalData: header };
 };
 
-const hasMagic = (bytes: Uint8Array): boolean =>
-  bytes.byteLength >= magic.byteLength && magic.every((byte, index) => bytes[index] === byte);
+const createHeader = (salt: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> => {
+  const header = new Uint8Array(headerLength);
+  header.set(magic, 0);
+  header.set(salt, magic.byteLength);
+  return header;
+};
+
+const parseHeader = (bytes: Uint8Array<ArrayBuffer>) => {
+  const validMagic = magic.every((byte, index) => bytes[index] === byte);
+  if (bytes.byteLength < headerLength + tagLength || !validMagic) {
+    throw new Error("Invalid encrypted settings header");
+  }
+  const header = bytes.subarray(0, headerLength);
+  return { header, salt: header.subarray(magic.byteLength) };
+};
 
 export const decryptedSize = (encryptedSize: number): number | undefined => {
   if (encryptedSize < headerLength + tagLength) return undefined;
   const parts = Math.ceil(encryptedSize / encryptedPartSize);
-  const remainder = encryptedSize % encryptedPartSize;
-  if (parts > 1 && remainder > 0 && remainder <= tagLength) return undefined;
+  const finalPart = encryptedSize % encryptedPartSize;
+  // non-final parts are full, so the encoder never ends on a tag-only part
+  if (finalPart > 0 && finalPart <= tagLength) return undefined;
   return encryptedSize - headerLength - parts * tagLength;
 };
 
 async function* readFrames(
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
   frameSize: (index: number) => number,
-  onBytes?: (totalBytes: number) => void,
+  sizeLimit?: number,
 ): AsyncGenerator<Frame> {
   if (!reader) {
     yield { index: 0, bytes: new Uint8Array(0), isLast: true };
@@ -95,7 +111,9 @@ async function* readFrames(
       if (value.byteLength === 0) continue;
 
       totalBytes += value.byteLength;
-      onBytes?.(totalBytes);
+      if (sizeLimit !== undefined && totalBytes > sizeLimit) {
+        throw new RequestRejected({ status: 413, message: "Settings are too large" });
+      }
 
       let offset = 0;
       while (offset < value.byteLength) {
@@ -122,6 +140,22 @@ async function* readFrames(
   }
 }
 
+const sealFrame = async (
+  key: CryptoKey,
+  header: Uint8Array<ArrayBuffer>,
+  frame: Frame,
+): Promise<Uint8Array<ArrayBuffer>> =>
+  new Uint8Array(await crypto.subtle.encrypt(cipherParams(header, frame), key, frame.bytes));
+
+const openFrame = async (
+  key: CryptoKey,
+  header: Uint8Array<ArrayBuffer>,
+  frame: Frame,
+): Promise<Uint8Array<ArrayBuffer>> => {
+  const ciphertext = frame.index === 0 ? frame.bytes.subarray(headerLength) : frame.bytes;
+  return new Uint8Array(await crypto.subtle.decrypt(cipherParams(header, frame), key, ciphertext));
+};
+
 export async function* encryptSettings(
   input: SettingsKeyInput & {
     readonly body: ReadableStream<Uint8Array> | null;
@@ -129,40 +163,63 @@ export async function* encryptSettings(
   },
 ): AsyncGenerator<Uint8Array<ArrayBuffer>> {
   const salt = crypto.getRandomValues(new Uint8Array(saltLength));
-  const header = new Uint8Array(headerLength);
-  header.set(magic, 0);
-  header.set(salt, magic.byteLength);
-
+  const header = createHeader(salt);
   const key = await deriveEncryptionKey(input, salt);
   const frames = readFrames(
     input.body ? new ReadableStreamDefaultReader(input.body) : undefined,
-    (index) =>
-      index === 0 ? encryptedPartSize - headerLength - tagLength : encryptedPartSize - tagLength,
-    (totalBytes) => {
-      if (totalBytes > input.sizeLimit) {
-        throw new RequestRejected({ status: 413, message: "Settings are too large" });
-      }
-    },
+    plaintextFrameSize,
+    input.sizeLimit,
   );
 
   for await (const frame of frames) {
-    const ciphertext = new Uint8Array(
-      await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: chunkNonce(frame.index, frame.isLast), additionalData: header },
-        key,
-        frame.bytes,
-      ),
-    );
-    if (frame.index === 0) {
-      const firstPart = new Uint8Array(headerLength + ciphertext.byteLength);
-      firstPart.set(header, 0);
-      firstPart.set(ciphertext, headerLength);
-      yield firstPart;
-    } else {
+    const ciphertext = await sealFrame(key, header, frame);
+    if (frame.index > 0) {
       yield ciphertext;
+      continue;
     }
+    const firstPart = new Uint8Array(headerLength + ciphertext.byteLength);
+    firstPart.set(header, 0);
+    firstPart.set(ciphertext, headerLength);
+    yield firstPart;
   }
 }
+
+const decryptFrames = async function* (
+  frames: AsyncGenerator<Frame>,
+  key: CryptoKey,
+  header: Uint8Array<ArrayBuffer>,
+  size: number,
+): AsyncGenerator<Uint8Array<ArrayBuffer>> {
+  let remaining = size;
+  for await (const frame of frames) {
+    const plaintext = await openFrame(key, header, frame);
+    remaining -= plaintext.byteLength;
+    if (remaining < 0 || (frame.isLast && remaining !== 0)) {
+      throw new Error("Decrypted settings size mismatch");
+    }
+    yield plaintext;
+    if (frame.isLast) return;
+  }
+  if (remaining !== 0) throw new Error("Unexpected end of encrypted settings stream");
+};
+
+const streamFrom = <T>(
+  iterable: AsyncIterable<T>,
+  cancel: (reason: unknown) => Promise<void>,
+): ReadableStream<T> => {
+  const iterator = iterable[Symbol.asyncIterator]();
+  return new ReadableStream<T>({
+    async pull(controller) {
+      const next = await iterator.next();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      await cancel(reason);
+      await iterator.return?.(undefined).catch(() => {});
+    },
+  });
+};
 
 const openSettingsStream = async (
   input: SettingsKeyInput & { readonly stored: StoredSettings },
@@ -175,82 +232,36 @@ const openSettingsStream = async (
 
   const reader = new ReadableStreamDefaultReader(input.stored.body);
   const frames = readFrames(reader, () => encryptedPartSize);
-  const firstResult = await frames.next();
-  if (firstResult.done) {
-    throw new Error("Encrypted settings stream is empty");
-  }
 
   try {
-    const firstFrame = firstResult.value;
-    if (firstFrame.bytes.byteLength < headerLength + tagLength || !hasMagic(firstFrame.bytes)) {
-      throw new Error("Invalid encrypted settings header");
-    }
+    const first = await frames.next();
+    if (first.done) throw new Error("Encrypted settings stream is empty");
 
-    const header = firstFrame.bytes.subarray(0, headerLength);
-    const salt = header.subarray(magic.byteLength, headerLength);
+    const { header, salt } = parseHeader(first.value.bytes);
     const key = await deriveEncryptionKey(input, salt);
+    const firstPlaintext = await openFrame(key, header, first.value);
 
-    const decryptFrame = async (
-      frame: Frame,
-      ciphertext: Uint8Array<ArrayBuffer>,
-    ): Promise<Uint8Array<ArrayBuffer>> =>
-      new Uint8Array(
-        await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: chunkNonce(frame.index, frame.isLast), additionalData: header },
-          key,
-          ciphertext,
-        ),
-      );
-
-    const firstPlaintext = await decryptFrame(firstFrame, firstFrame.bytes.subarray(headerLength));
-
-    if (firstFrame.isLast) {
-      await frames.return(undefined);
+    if (first.value.isLast) {
       if (firstPlaintext.byteLength !== size) {
         throw new Error("Decrypted settings size mismatch");
       }
+      await frames.return(undefined);
       return { body: new Blob([firstPlaintext]).stream(), size };
     }
 
-    let remainingBytes = size - firstPlaintext.byteLength;
+    const plaintextFrames = (async function* () {
+      try {
+        yield firstPlaintext;
+        yield* decryptFrames(frames, key, header, size - firstPlaintext.byteLength);
+      } finally {
+        await frames.return(undefined).catch(() => {});
+      }
+    })();
 
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(firstPlaintext);
-      },
-      async pull(controller) {
-        try {
-          const next = await frames.next();
-          if (next.done) {
-            if (remainingBytes !== 0) {
-              throw new Error("Unexpected end of encrypted settings stream");
-            }
-            controller.close();
-            return;
-          }
-
-          const plaintext = await decryptFrame(next.value, next.value.bytes);
-          remainingBytes -= plaintext.byteLength;
-          if (remainingBytes < 0 || (next.value.isLast && remainingBytes !== 0)) {
-            throw new Error("Decrypted settings size mismatch");
-          }
-          controller.enqueue(plaintext);
-          if (next.value.isLast) {
-            await frames.return(undefined);
-            controller.close();
-          }
-        } catch (error) {
-          await frames.return(undefined).catch(() => {});
-          throw error;
-        }
-      },
-      async cancel(reason) {
-        await reader.cancel(reason).catch(() => {});
-        await frames.return(undefined);
-      },
-    });
-
-    return { body, size };
+    return {
+      body: streamFrom(plaintextFrames, (reason) => reader.cancel(reason).catch(() => {})),
+      size,
+    };
   } catch (error) {
     await frames.return(undefined).catch(() => {});
     throw error;
