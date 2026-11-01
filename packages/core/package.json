@@ -16,6 +16,7 @@
     "./oauth/authorize": "./src/oauth/authorize.ts",
     "./oauth/discord": "./src/oauth/discord.ts",
     "./settings/cleanup": "./src/settings/cleanup.ts",
+    "./settings/crypto": "./src/settings/crypto.ts",
     "./settings/operations": "./src/settings/operations.ts",
     "./settings/store": "./src/settings/store.ts"
   },

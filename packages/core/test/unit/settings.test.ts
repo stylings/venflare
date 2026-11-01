@@ -118,12 +118,27 @@ describe("settings", () => {
 
   test("returns the settings body when the ETag has changed", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
+    let storedKey = "";
+    let storedBytes = new Uint8Array(0);
+    await run(writeSettings(upload()), {
+      settings: settingsStore({
+        put: (key, parts) =>
+          Effect.promise(async () => {
+            storedKey = key;
+            const chunks = await Array.fromAsync(parts);
+            storedBytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+          }),
+      }),
+    });
+    expect(storedBytes).not.toEqual(bytes);
+
     const response = await run(readSettings(authorization, { ifNoneMatch: "old" }), {
       accounts: accountStore({
-        find: () => Effect.succeed(account({ objectKey: "blob", written: 1234 })),
+        find: () => Effect.succeed(account({ objectKey: storedKey, written: 1234 })),
       }),
       settings: settingsStore({
-        get: () => Effect.succeed({ body: new Blob([bytes]).stream(), size: bytes.byteLength }),
+        get: () =>
+          Effect.succeed({ body: new Blob([storedBytes]).stream(), size: storedBytes.byteLength }),
       }),
     });
 

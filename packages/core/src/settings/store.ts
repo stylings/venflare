@@ -11,8 +11,7 @@ export interface SettingsStoreService {
   readonly get: (key: string) => Effect.Effect<StoredSettings | undefined, StorageError>;
   readonly put: (
     key: string,
-    body: ReadableStream<Uint8Array> | null,
-    sizeLimit: number,
+    encryptedParts: AsyncIterable<Uint8Array<ArrayBuffer>>,
   ) => Effect.Effect<void, StorageError | RequestRejected>;
   readonly delete: (keys: ReadonlyArray<string>) => Effect.Effect<void, StorageError>;
 }

@@ -29,7 +29,7 @@ The API uses Elysia v2 (beta) with a build-time AOT step, Effect v4 (RC), and Dr
 | Config and environment variables              | `packages/core/src/config.ts`           |
 | Sign-in and the Discord OAuth flow            | `packages/core/src/oauth/`              |
 | Accounts, API secrets, and auth checks        | `packages/core/src/accounts/`           |
-| Settings uploads and downloads                | `packages/core/src/settings/`           |
+| Settings uploads, downloads, and encryption   | `packages/core/src/settings/`           |
 | The hourly cleanup job                        | `packages/core/src/settings/cleanup.ts` |
 | HTTP routes                                   | `packages/server/src/routes/`           |
 | Worker entry point and scheduled handler      | `packages/server/src/index.ts`          |

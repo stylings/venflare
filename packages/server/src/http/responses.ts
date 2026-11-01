@@ -39,7 +39,25 @@ export const finalizeResponse = (request: Request, response: Response): Response
       headers.append("vary", "Access-Control-Request-Method, Access-Control-Request-Headers");
     }
   }
-  return new Response(request.method === "HEAD" ? null : response.body, {
+  let body = request.method === "HEAD" ? null : response.body;
+  const length = headers.get("content-length");
+  if (body && length !== null) {
+    const stream = new FixedLengthStream(Number(length));
+    void body.pipeTo(stream.writable).catch((cause) => {
+      if (cause instanceof DOMException && cause.name === "AbortError") return;
+      console.error({
+        event: "response.failed",
+        error: "BodyStreamError",
+        cause,
+        method: request.method,
+        path: new URL(request.url).pathname,
+        rayId: request.headers.get("cf-ray"),
+      });
+    });
+    body = stream.readable;
+  }
+
+  return new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers,

@@ -1,66 +1,20 @@
 import { Effect, Layer } from "effect";
 
 import { RequestRejected, StorageError } from "@vencloud/core/errors";
+import { encryptedPartSize } from "@vencloud/core/settings/crypto";
 import { SettingsStore } from "@vencloud/core/settings/store";
-
-// R2 requires at least 5 MiB per multipart part, except for the final part.
-const multipartPartSize = 5 * 1024 * 1024;
-
-async function* readUploadParts(body: ReadableStream<Uint8Array> | null, sizeLimit: number) {
-  if (!body) {
-    yield new Uint8Array(0);
-    return;
-  }
-
-  const reader = body.getReader();
-  let completed = false;
-  let totalBytes = 0;
-  let buffer = new Uint8Array(multipartPartSize);
-  let bufferedBytes = 0;
-
-  try {
-    while (true) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      totalBytes += chunk.byteLength;
-      if (totalBytes > sizeLimit) {
-        throw new RequestRejected({ status: 413, message: "Settings are too large" });
-      }
-
-      let offset = 0;
-      while (offset < chunk.byteLength) {
-        const bytesToCopy = Math.min(multipartPartSize - bufferedBytes, chunk.byteLength - offset);
-        buffer.set(chunk.subarray(offset, offset + bytesToCopy), bufferedBytes);
-        bufferedBytes += bytesToCopy;
-        offset += bytesToCopy;
-        if (bufferedBytes === multipartPartSize) {
-          yield buffer;
-          // The consumer owns the yielded part; later chunks need a fresh buffer.
-          buffer = new Uint8Array(multipartPartSize);
-          bufferedBytes = 0;
-        }
-      }
-    }
-    if (bufferedBytes > 0 || totalBytes === 0) yield buffer.subarray(0, bufferedBytes);
-    completed = true;
-  } finally {
-    if (!completed) await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-}
 
 const writeSettings = async (
   bucket: R2Bucket,
   key: string,
-  body: ReadableStream<Uint8Array> | null,
-  sizeLimit: number,
+  encryptedParts: AsyncIterable<Uint8Array<ArrayBuffer>>,
 ): Promise<void> => {
   let upload: R2MultipartUpload | undefined;
   const uploadedParts: R2UploadedPart[] = [];
 
   try {
-    for await (const part of readUploadParts(body, sizeLimit)) {
-      if (!upload && part.byteLength < multipartPartSize) {
+    for await (const part of encryptedParts) {
+      if (!upload && part.byteLength < encryptedPartSize) {
         await bucket.put(key, part, { httpMetadata: { contentType: "application/octet-stream" } });
         return;
       }
@@ -74,8 +28,12 @@ const writeSettings = async (
     if (upload) {
       try {
         await upload.abort();
-      } catch {
-        console.error({ event: "storage.cleanup_failed", operation: "abort multipart upload" });
+      } catch (cause) {
+        console.error({
+          event: "storage.cleanup_failed",
+          operation: "abort multipart upload",
+          cause,
+        });
       }
     }
     throw error;
@@ -94,9 +52,9 @@ export const settingsStoreLayer = (bucket: R2Bucket) =>
           catch: (cause) => new StorageError({ operation: "read settings", cause }),
         }),
       ),
-      put: Effect.fn("SettingsStore.put")((key, body, sizeLimit) =>
+      put: Effect.fn("SettingsStore.put")((key, encryptedParts) =>
         Effect.tryPromise({
-          try: () => writeSettings(bucket, key, body, sizeLimit),
+          try: () => writeSettings(bucket, key, encryptedParts),
           catch: (cause) =>
             cause instanceof RequestRejected
               ? cause
