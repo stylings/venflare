@@ -28,8 +28,12 @@ const writeSettings = async (
     if (upload) {
       try {
         await upload.abort();
-      } catch {
-        console.error({ event: "storage.cleanup_failed", operation: "abort multipart upload" });
+      } catch (cause) {
+        console.error({
+          event: "storage.cleanup_failed",
+          operation: "abort multipart upload",
+          cause,
+        });
       }
     }
     throw error;
