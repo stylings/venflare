@@ -26,8 +26,14 @@ interface Frame {
   readonly isLast: boolean;
 }
 
-const plaintextFrameSize = (index: number): number =>
-  encryptedPartSize - tagLength - (index === 0 ? headerLength : 0);
+interface FrameOptions {
+  readonly firstFrameSize: number;
+  readonly frameSize: number;
+  readonly sizeLimit?: number;
+}
+
+const firstPlaintextFrameSize = encryptedPartSize - headerLength - tagLength;
+const plaintextFrameSize = encryptedPartSize - tagLength;
 
 const deriveEncryptionKey = async (
   input: SettingsKeyInput,
@@ -71,11 +77,13 @@ const createHeader = (salt: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> =>
 };
 
 const parseHeader = (bytes: Uint8Array<ArrayBuffer>) => {
-  const validMagic = magic.every((byte, index) => bytes[index] === byte);
-  if (bytes.byteLength < headerLength + tagLength || !validMagic) {
+  if (
+    bytes.byteLength < headerLength + tagLength ||
+    magic.some((byte, index) => bytes[index] !== byte)
+  ) {
     throw new Error("Invalid encrypted settings header");
   }
-  const header = bytes.subarray(0, headerLength);
+  const header = bytes.slice(0, headerLength);
   return { header, salt: header.subarray(magic.byteLength) };
 };
 
@@ -90,8 +98,7 @@ export const decryptedSize = (encryptedSize: number): number | undefined => {
 
 async function* readFrames(
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
-  frameSize: (index: number) => number,
-  sizeLimit?: number,
+  { firstFrameSize, frameSize, sizeLimit = Infinity }: FrameOptions,
 ): AsyncGenerator<Frame> {
   if (!reader) {
     yield { index: 0, bytes: new Uint8Array(0), isLast: true };
@@ -102,7 +109,7 @@ async function* readFrames(
   let totalBytes = 0;
   let bufferedBytes = 0;
   let index = 0;
-  let buffer = new Uint8Array(frameSize(0));
+  let buffer = new Uint8Array(firstFrameSize);
 
   try {
     while (true) {
@@ -111,7 +118,7 @@ async function* readFrames(
       if (value.byteLength === 0) continue;
 
       totalBytes += value.byteLength;
-      if (sizeLimit !== undefined && totalBytes > sizeLimit) {
+      if (totalBytes > sizeLimit) {
         throw new RequestRejected({ status: 413, message: "Settings are too large" });
       }
 
@@ -121,7 +128,7 @@ async function* readFrames(
         if (bufferedBytes === buffer.byteLength) {
           yield { index, bytes: buffer, isLast: false };
           index += 1;
-          buffer = new Uint8Array(frameSize(index));
+          buffer = new Uint8Array(frameSize);
           bufferedBytes = 0;
         }
 
@@ -165,22 +172,22 @@ export async function* encryptSettings(
   const salt = crypto.getRandomValues(new Uint8Array(saltLength));
   const header = createHeader(salt);
   const key = await deriveEncryptionKey(input, salt);
-  const frames = readFrames(
-    input.body ? new ReadableStreamDefaultReader(input.body) : undefined,
-    plaintextFrameSize,
-    input.sizeLimit,
-  );
+  const frames = readFrames(input.body ? new ReadableStreamDefaultReader(input.body) : undefined, {
+    firstFrameSize: firstPlaintextFrameSize,
+    frameSize: plaintextFrameSize,
+    sizeLimit: input.sizeLimit,
+  });
 
   for await (const frame of frames) {
     const ciphertext = await sealFrame(key, header, frame);
-    if (frame.index > 0) {
+    if (frame.index === 0) {
+      const firstPart = new Uint8Array(headerLength + ciphertext.byteLength);
+      firstPart.set(header, 0);
+      firstPart.set(ciphertext, headerLength);
+      yield firstPart;
+    } else {
       yield ciphertext;
-      continue;
     }
-    const firstPart = new Uint8Array(headerLength + ciphertext.byteLength);
-    firstPart.set(header, 0);
-    firstPart.set(ciphertext, headerLength);
-    yield firstPart;
   }
 }
 
@@ -204,7 +211,7 @@ const decryptFrames = async function* (
 };
 
 const streamFrom = <T>(
-  iterable: AsyncIterable<T>,
+  iterable: AsyncGenerator<T>,
   cancel: (reason: unknown) => Promise<void>,
 ): ReadableStream<T> => {
   const iterator = iterable[Symbol.asyncIterator]();
@@ -216,7 +223,7 @@ const streamFrom = <T>(
     },
     async cancel(reason) {
       await cancel(reason);
-      await iterator.return?.(undefined).catch(() => {});
+      await iterator.return(undefined).catch(() => {});
     },
   });
 };
@@ -231,7 +238,10 @@ const openSettingsStream = async (
   }
 
   const reader = new ReadableStreamDefaultReader(input.stored.body);
-  const frames = readFrames(reader, () => encryptedPartSize);
+  const frames = readFrames(reader, {
+    firstFrameSize: Math.min(encryptedPartSize, input.stored.size),
+    frameSize: encryptedPartSize,
+  });
 
   try {
     const first = await frames.next();
