@@ -20,7 +20,7 @@ Venflare keeps your [Vencord](https://github.com/Vendicated/Vencord) settings in
 > [!WARNING]
 > Venflare is experimental. Keep your own exported copy of your settings, and don't rely on this as your only backup.
 >
-> Encryption happens on the server, not on your device. An operator who knows your Discord user ID can decrypt your settings. [How your data is stored](#how-your-data-is-stored) has the details.
+> Encryption happens on the server, not on your device. An operator who knows your Discord user ID and holds `PepperSettings` can decrypt your settings. [How your data is stored](#how-your-data-is-stored) has the details.
 
 Venflare is a separate project, not an official Vencord service. Report problems here, not to the Vencord support server.
 
