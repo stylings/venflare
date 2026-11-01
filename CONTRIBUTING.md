@@ -1,16 +1,16 @@
 # Contributing
 
-This guide is for changing the code. If you want to host Venflare yourself, see the [README](README.md).
+This guide is for changing the code. Want to host Venflare yourself instead? See [HOSTING.md](HOSTING.md).
 
 ## Setup
 
-Finish the [Quick start](README.md#quick-start) through step 5. On a fresh checkout, `bun dev` has to run once with the secrets set. It generates `sst-env.d.ts`. That file isn't committed, and typechecking needs it. Set the secrets instead of writing that file by hand.
+Finish the [Quick start](HOSTING.md#quick-start) through step 5. On a fresh checkout, `bun dev` has to run once with the secrets set, because it generates `sst-env.d.ts`. That file isn't committed, but typechecking needs it. Set the secrets instead of writing that file by hand.
 
-Keep the SST app name, `vencloud-worker`. Renaming it creates a separate deployment, and it doesn't migrate stored settings.
+Keep the SST app name, `vencloud-worker`. Renaming it creates a separate deployment, and your stored settings don't come along.
 
 ## Layout
 
-Venflare has three Bun workspaces. Infrastructure lives in `infra/`.
+Venflare has three Bun workspaces, and the infrastructure lives in `infra/`.
 
 ```text
 packages/
@@ -20,7 +20,7 @@ packages/
 infra/        SST resources
 ```
 
-The API uses Elysia v2 (beta) with a build-time AOT step, Effect v4 (RC), and Drizzle v1 (RC). Their versions are pinned in the workspace `package.json` files. Bun runs builds, scripts, and tests. The deployed API runs in workerd, Cloudflare's runtime, not in Bun.
+The API runs on Elysia v2 (beta) with a build-time AOT step. It also uses Effect v4 (RC) and Drizzle v1 (RC). Their versions are pinned in the workspace `package.json` files. Bun runs the builds, scripts, and tests. The deployed API runs in workerd, Cloudflare's runtime, not in Bun.
 
 ## Where things live
 
@@ -40,7 +40,7 @@ The API uses Elysia v2 (beta) with a build-time AOT step, Effect v4 (RC), and Dr
 
 ## Commands
 
-Run `bun run check` before you push. It runs typecheck, lint, format check, and both test suites. The integration tests build the API first, so `check` builds it too.
+Run `bun run check` before you push. It runs the typecheck, lint, format check, and both test suites. The integration tests build the API first, so `check` builds it too.
 
 ```sh
 bun run build              # Build the API
@@ -56,7 +56,7 @@ bun run check              # Typecheck, lint, format check, and all tests
 
 Unit tests live in `packages/core/test/unit` and `packages/server/test/unit`.
 
-Integration tests live in `packages/server/test/integration`. They run locally in workerd, with D1 and R2 provided by Miniflare. Discord is mocked. They don't call the real Discord API or need Cloudflare credentials.
+Integration tests live in `packages/server/test/integration`. They run locally in workerd, with D1 and R2 provided by Miniflare. Discord is mocked, so they don't call the real Discord API or need Cloudflare credentials.
 
 ## Schema changes
 
