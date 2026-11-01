@@ -20,7 +20,7 @@ Venflare keeps your [Vencord](https://github.com/Vendicated/Vencord) settings in
 > [!WARNING]
 > Venflare is experimental. Keep your own exported copy of your settings, and don't rely on this as your only backup.
 >
-> Whoever runs the instance can read your settings. [How your data is stored](#how-your-data-is-stored) has the details.
+> Encryption happens on the server, not on your device. An operator who knows your Discord user ID can decrypt your settings. [How your data is stored](#how-your-data-is-stored) has the details.
 
 Venflare is a separate project, not an official Vencord service. Report problems here, not to the Vencord support server.
 
@@ -28,7 +28,7 @@ Venflare uses four services:
 
 - **Cloudflare Workers** runs the API that Vencord talks to.
 - **D1** stores account records.
-- **R2** stores your settings in a private bucket.
+- **R2** stores your encrypted settings in a private bucket.
 - **Discord** signs you in. This API only requests the `identify` scope.
 
 The goal is to work with existing Vencord clients. The tests cover OAuth, uploads, downloads, deletion, and timestamp ETags.
@@ -142,6 +142,7 @@ Try **Upload Settings** and **Download Settings** before you rely on automatic s
 
 - **Sign-in fails.** The redirect URL in Discord and `DiscordRedirectUri` must match exactly.
 - **Someone can't sign in.** If `ALLOWED_USERS` is set, their Discord user ID has to be on the list.
+- **Old backups won't download.** Backups from before the encryption change can't be read through the API. Upload your settings again.
 
 ## Deploy to production
 
@@ -180,15 +181,23 @@ Removing someone from `ALLOWED_USERS` blocks their sign-in and sync. They can st
 
 ## How your data is stored
 
-Your settings reach the Worker compressed. The Worker doesn't decompress them or encrypt them before writing them to R2, so whoever runs the instance can read your settings.
+Your settings reach the Worker compressed, but not encrypted. The Worker doesn't decompress them. It encrypts them before writing to R2.
 
 | Where       | What it holds                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | D1          | Keyed hashes of Discord user IDs, a random account generation ID, a pointer to your current backup, and upload cleanup records |
-| R2          | Your settings, one object per upload                                                                                           |
+| R2          | Your settings, one encrypted object per upload                                                                                 |
 | SST secrets | The Discord app secrets and the two peppers                                                                                    |
 
 Venflare doesn't store raw Discord user IDs in D1 or R2. It uses your Discord access token once, for sign-in, and doesn't keep it. It derives API secrets with HMAC-SHA-256 instead of storing them.
+
+**Encryption.** Each upload is encrypted in 5 MiB frames with AES-256-GCM before it's written to R2. Each upload gets its own key. HKDF-SHA-256 derives that key from `PepperSettings`, your Discord user ID, your account generation ID, and the R2 object key.
+
+Your Discord user ID only travels in `Authorization` headers. It isn't stored in D1 or R2. So the bucket and the database alone aren't enough to read your settings.
+
+This isn't end-to-end encryption. An operator who knows your Discord user ID and holds `PepperSettings` can derive the key.
+
+Only uploads made after the encryption change are encrypted. Older plaintext backups aren't migrated, and you can't read them through the API. Upload your settings again after you upgrade.
 
 **Deleting.** Deleting your settings or your account cuts off access to your current backup. The Worker also tries to delete the R2 object right away. If that fails, the hourly cleanup job removes it. The cleanup job removes any upload that's no longer current and is more than an hour old.
 
