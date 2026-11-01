@@ -44,6 +44,7 @@ export const finalizeResponse = (request: Request, response: Response): Response
   if (body && length !== null) {
     const stream = new FixedLengthStream(Number(length));
     void body.pipeTo(stream.writable).catch((cause) => {
+      if (cause instanceof DOMException && cause.name === "AbortError") return;
       console.error({
         event: "response.failed",
         error: "BodyStreamError",
